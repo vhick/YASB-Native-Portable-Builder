@@ -1,12 +1,14 @@
-# YASB Native Portable — independent no-fork builder (v1.1)
+# YASB Native Portable — independent no-fork builder (v1.2)
 
 **WORKFLOW_MODE: NATIVE** — one workflow, Windows x64. No PortableApps workflow, PAF installer, or upstream fork is included.
 
+**Builder v1.2 correction:** The GitHub Actions relocation check now uses Windows directory identity instead of textual path comparison. This fixes the `RUNNER~1` versus `runneradmin` 8.3 alias mismatch that caused the v1.1 workflow to stop after successfully building and staging YASB. The Windows regression tests exercise the Win32 short-path API where it is available.
+
 This is an **unofficial** builder for upstream [amnweb/yasb](https://github.com/amnweb/yasb). It downloads fresh source from the developer's repository each time the GitHub Action runs, patches **a temporary local clone only**, builds with upstream's `src/build.py build` (cx_Freeze), and uploads a Native Portable ZIP. Your independent builder repository never contains a permanent upstream-source copy.
 
-**Builder v1.1 correction:** Fixes the Stage Native Portable failure seen on 2026-10-27: YASB compiled but the v1.0 packager looked only for `dist/library.zip`. The stage now accepts either `dist/lib/library.zip` (current cx_Freeze layout) or the root archive without moving it, and fails clearly if neither is a valid ZIP. The workflow now executes synthetic packaging regression tests before fetching upstream. You may replace all files in your existing independent builder repo; no fork, repository recreation, or upstream source refresh is required.
+**Builder v1.1 correction (retained in v1.2):** Fixes the Stage Native Portable failure seen on 2026-10-27: YASB compiled but the v1.0 packager looked only for `dist/library.zip`. The stage now accepts either `dist/lib/library.zip` (current cx_Freeze layout) or the root archive without moving it, and fails clearly if neither is a valid ZIP. The workflow now executes synthetic packaging regression tests before fetching upstream. You may replace all files in your existing independent builder repo; no fork, repository recreation, or upstream source refresh is required.
 
-**Status:** Builder code, guarded patching, packaging and test scripts are provided. The actual Windows build/portable application **has not been run or verified by the creator of this kit**. GitHub Actions is designed to perform the actual Windows build and report failures. An unsigned build may be blocked by antivirus or SmartScreen; do not turn off protection to run it.
+**Status:** Previous GitHub Actions logs from October 27, 2026 verify that YASB compiled and the v1.1 packaging stage completed. They do **not** verify the final portable ZIP or GUI launch. This v1.2 repair has been tested locally using synthetic files; its full updated Windows workflow and desktop GUI **have not been independently verified**. GitHub Actions is designed to perform the Windows build and report failures. An unsigned build may be blocked by antivirus or SmartScreen; do not turn off protection to run it.
 
 ## 1. Create the independent repository using GitHub Desktop
 
@@ -144,3 +146,35 @@ This builder kit is community work and is not affiliated with or endorsed by the
 5. If the Action succeeds, download the resulting native portable ZIP. If another step fails, save **Download logs** from the workflow and inspect the exact new failure.
 
 **Evidence and limits:** The October 27 workflow logs showed a successful Python build but failed before staging because `dist/library.zip` was missing. There is no directory listing from that Windows runner in the supplied logs, so the exact location of its generated Python ZIP cannot be confirmed from that run. Current cx_Freeze convention and upstream setup make `dist/lib/library.zip` likely; the corrected code detects either location and reports the directory contents on failure. Local tests cover synthetic output only, not a full Windows GUI execution.
+
+## v1.1 → v1.2: Fix Windows 8.3 short-path false alarm
+
+A real Windows GitHub Actions run on October 27, 2026 built and staged the
+application successfully, then failed at the CLI relocation smoke test:
+
+- CLI reported `C:\Users\RUNNER~1\AppData\Local\Temp\...\Data\Config`.
+- The test expected `C:\Users\runneradmin\AppData\Local\Temp\...\Data\Config`.
+
+These are aliases for the **same directory**. v1.1 compared their text,
+which falsely failed even when the portable configuration path was correct.
+**v1.2 now checks the identity of existing directories with `os.path.samefile()`**,
+which correctly accepts Windows short 8.3 aliases, yet still rejects a
+missing folder or a genuinely wrong config folder. Tests also attempt to
+exercise the actual Win32 short-path API when supported by the runner.
+
+To update your **existing** GitHub Desktop builder repository:
+
+1. Extract the **v1.2 builder ZIP** and copy **all contents** (including
+   `.github`) directly into your existing builder repository folder.
+2. In GitHub Desktop, commit the changed files as
+   `Fix Windows 8.3 path comparison in YASB smoke test v1.2`.
+3. Click **Push origin** and rerun **Actions → Build YASB Native Portable → Run workflow**.
+4. Leave `upstream_ref` blank to download the latest upstream commit.
+5. If it succeeds, download the ZIP artifact and preserve `Data` when upgrading.
+
+**What is established:** The user's v1.1 run compiled YASB, packaged the
+frozen application with `lib/library.zip`, and executed `yasbc.exe --config`
+from the first relocated directory. The run stopped only at an incorrect
+path-string comparison. The updated Windows build has **not** yet been run
+as part of preparing this kit; full GUI/runtime no-trace portability is also
+not verified.

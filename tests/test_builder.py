@@ -1,6 +1,7 @@
 """Synthetic offline tests only. These do NOT demonstrate an upstream Windows build."""
 from __future__ import annotations
 import importlib.util
+import os
 import json
 import tempfile
 import zipfile
@@ -17,11 +18,44 @@ def load(name: str):
     return module
 
 
+def test_windows_config_path_equivalence(root: Path) -> None:
+    """Regression for GitHub runner's short 8.3 username in CLI output."""
+    if os.name != 'nt':
+        print('SKIP: Windows-only samefile/8.3 path regression (requires Windows)')
+        return
+    smoke_test = load('smoke_test')
+    config = root / 'Long Config Directory'
+    other = root / 'Unrelated Folder'
+    config.mkdir()
+    other.mkdir()
+    assert smoke_test.config_path_matches(str(config), config)
+    assert not smoke_test.config_path_matches(str(other), config)
+    assert not smoke_test.config_path_matches(str(root / 'Missing Config'), config)
+    assert not smoke_test.config_path_matches('not a valid configuration directory', config)
+
+    # Windows can represent the very same directory with DOS 8.3 aliases.
+    # GetShortPathNameW may return the long spelling if 8.3 aliases are off.
+    import ctypes
+    from ctypes import wintypes
+    api = ctypes.windll.kernel32.GetShortPathNameW
+    api.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    api.restype = wintypes.DWORD
+    buf = ctypes.create_unicode_buffer(32768)
+    count = api(str(config), buf, len(buf))
+    if 0 < count < len(buf) and buf.value.lower() != str(config).lower():
+        assert smoke_test.config_path_matches(buf.value, config), (buf.value, config)
+        print('PASS: Windows short 8.3 path equals its actual long directory')
+    else:
+        print('SKIP: Filesystem did not expose a distinct DOS 8.3 spelling')
+    print('PASS: Windows existing-folder identity and missing/different-folder checks')
+
+
 def run() -> None:
     patch = load('patch_portable')
     package = load('package_native')
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        test_windows_config_path_equivalence(root)
         f = root / 'mod.py'
         f.write_text('x = 1\n', encoding='utf-8')
         patch.replacement(f, 'x = 1', 'x = 2', 'synthetic anchor')

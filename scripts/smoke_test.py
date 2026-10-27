@@ -43,6 +43,20 @@ def cli(path: Path, *args: str) -> str:
     return process.stdout.strip()
 
 
+def config_path_matches(actual: str, expected: Path) -> bool:
+    """Compare existing Windows folders by identity, not by their printed names.
+
+    Windows may print C:\\Users\\RUNNER~1 and C:\\Users\\runneradmin for
+    the same folder. os.path.samefile accepts both, but string comparison does not.
+    An absent directory, unrelated directory, or malformed CLI output fails.
+    """
+    try:
+        return (expected.is_dir() and Path(actual).is_dir()
+                and os.path.samefile(actual, expected))
+    except (OSError, ValueError):
+        return False
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument('--stage', required=True, type=Path)
@@ -65,9 +79,14 @@ def main() -> None:
             version = cli(target, '--version')
             output = cli(target, '--config')
             expected = (target / 'Data/Config').resolve()
-            # Compare normalized Windows paths (case is not significant).
-            if str(expected).casefold() not in output.casefold():
-                raise RuntimeError(f'CLI config path wrong for {target}: actual {output!r}, expected {expected}')
+            # Windows 8.3 aliases (RUNNER~1 vs runneradmin) must match by
+            # directory identity, not by their textual representation.
+            if not config_path_matches(output, expected):
+                raise RuntimeError(
+                    f'CLI config directory wrong for {target}: actual {output!r}, '
+                    f'expected {expected}; resolved actual {os.path.realpath(output)!r}, '
+                    f'resolved expected {os.path.realpath(expected)!r}'
+                )
             lines += [f'PASS: CLI --version under {target}: {version}',
                       f'PASS: CLI --config under {target}: {output}']
     if before_regs != {key: reg_values(key) for key in registry_paths}:
@@ -76,7 +95,8 @@ def main() -> None:
         raise RuntimeError('Host LOCALAPPDATA/YASB changed during CLI checks')
     if names(actual_config) != before_config:
         raise RuntimeError('Host user .config/yasb changed during CLI checks')
-    lines += ['PASS: HKCU Run/Fonts registry values unchanged by these CLI checks',
+    lines += ['PASS: Portable CLI paths matched actual relocated directory identities (8.3 aliases accepted)',
+              'PASS: HKCU Run/Fonts registry values unchanged by these CLI checks',
               'PASS: Host .config/yasb and LOCALAPPDATA/YASB entry names unchanged',
               'NOT TESTED: GUI behavior, complete registry or filesystem writes, removable-drive hardware.',
               'NOT TESTED: actual Windows installation/reformat or cross-machine Cloud credentials.']
