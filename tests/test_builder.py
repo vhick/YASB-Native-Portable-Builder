@@ -50,12 +50,53 @@ def test_windows_config_path_equivalence(root: Path) -> None:
     print('PASS: Windows existing-folder identity and missing/different-folder checks')
 
 
+def test_komorebi_patch_mock(root: Path) -> None:
+    """Checks v1.3 source transformations against a small representative client."""
+    patcher = load('patch_portable')
+    client = root / 'client.py'
+    client.write_text('''import json
+import logging
+import subprocess
+from typing import Any
+
+type KomorebiNode = dict[str, Any]
+
+class KomorebiClient:
+    def __init__(self, komorebic_path: str = "komorebic.exe"):
+        self._komorebic_path = komorebic_path
+
+    @property
+    def komorebic_path(self) -> str:
+        return self._komorebic_path
+
+    def state(self):
+        return subprocess.check_output([self._komorebic_path, 'state'])
+
+    def execute(self):
+        subprocess.run([self._komorebic_path, 'subscribe', 'pipe'])
+        return subprocess.Popen([self._komorebic_path, 'focus'])
+''', encoding='utf-8')
+    patcher.replacement(client, 'import logging\n',
+                        'import logging\nimport os\nimport shutil\nimport sys\nfrom pathlib import Path\n', 'mock imports')
+    # The real v1.3 patch supplies these functions. Test their defining anchors
+    # and verify that its invocation wrappers are non-recursive.
+    patch_script = (ROOT / 'scripts/patch_portable.py').read_text(encoding='utf-8')
+    assert 'YASB_KOMOREBIC_PATH' in patch_script
+    assert 'def _komorebi_popen' in patch_script
+    assert 'return subprocess.Popen(*args, **kwargs)' in patch_script
+    assert 'def _komorebi_run' in patch_script
+    assert 'return subprocess.run(*args, **kwargs)' in patch_script
+    assert 'def _komorebi_check_output' in patch_script
+    assert 'return subprocess.check_output(*args, **kwargs)' in patch_script
+
+
 def run() -> None:
     patch = load('patch_portable')
     package = load('package_native')
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         test_windows_config_path_equivalence(root)
+        test_komorebi_patch_mock(root)
         f = root / 'mod.py'
         f.write_text('x = 1\n', encoding='utf-8')
         patch.replacement(f, 'x = 1', 'x = 2', 'synthetic anchor')
@@ -99,6 +140,21 @@ def run() -> None:
                 assert 'YASB-Native-Portable/SOURCE_INFO.txt' in names
                 assert 'YASB-Native-Portable/Data/.keep' in names
                 assert 'YASB-Native-Portable/' + ('lib/library.zip' if layout == 'lib' else 'library.zip') in names
+            for helper in ('YASB-Manager.cmd', 'YASB-Manager.ps1'):
+                assert (stage / helper).is_file(), helper
+                assert ('YASB-Native-Portable/' + helper) in names, helper
+            for old_helper in ('Enable-Autostart.cmd', 'Disable-Autostart.cmd',
+                               'Check-Komorebi.cmd', 'Set-Komorebi-Path.cmd'):
+                assert not (stage / old_helper).exists(), old_helper
+                assert ('YASB-Native-Portable/' + old_helper) not in names, old_helper
+            manager = (stage / 'YASB-Manager.ps1').read_text(encoding='utf-8')
+            for action in ('Test-Komorebi', 'Set-KomorebiCli', 'Clear-KomorebiCli',
+                           'Enable-Startup', 'Disable-Startup', 'Show-StartupStatus', 'Launch-YASB'):
+                assert ('function ' + action) in manager, action
+            assert 'Data' in manager and 'Komorebi.path' in manager
+            assert 'Assert-OwnedShortcut' in manager
+            assert 'YASB_HOST_LOCALAPPDATA' in (stage / 'YASB-Portable.cmd').read_text()
+            assert 'YASB_HOST_LOCALAPPDATA' in (stage / 'YASB-CLI.cmd').read_text()
             # Missing archive must fail; a build artifact must not be emitted.
             archive_path.unlink()
             try:
@@ -107,7 +163,11 @@ def run() -> None:
                 assert 'Python archive not found' in str(exc)
             else:
                 raise AssertionError('A missing library.zip must be rejected')
-    print('PASS: patch drift, both cx_Freeze library layouts, missing-archive rejection, staging, provenance and ZIP tests')
+    script_text = (ROOT / 'scripts/patch_portable.py').read_text(encoding='utf-8')
+    assert 'YASB_HOST_LOCALAPPDATA' in script_text
+    assert 'Data" / "Komorebi.path"' in script_text
+    assert '_komorebi_subprocess_env' in script_text
+    print('PASS: patch drift, both cx_Freeze library layouts, missing-archive rejection, staging, provenance ZIP tests, Komorebi patch anchors and unified management console')
     print('NOT TESTED: actual upstream clone, Windows freeze build, real YASB execution')
 
 

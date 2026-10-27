@@ -31,9 +31,22 @@ The original icons and cx_Freeze executables are preserved.
 No installer is run. Existing Windows settings/other installed YASB versions
 are not migrated or modified by the builder.
 
+OPTIONAL INTEGRATIONS (one menu):
+- Double-click YASB-Manager.cmd inside the extracted portable application.
+- Choose menu options to launch YASB, auto-detect/test Komorebi, optionally
+  override its CLI path (Data/Komorebi.path), or manage Windows startup.
+- Autostart creates a per-user Windows Startup shortcut ONLY when enabled.
+  It does not start Komorebi and must be refreshed after moving the app.
+- Auto-discovery prefers the running komorebi.exe's sibling komorebic.exe,
+  then nearby portable layouts, PATH, and common Scoop/WinGet/Cargo folders.
+- Komorebi must be running and workspace widgets enabled in config.yaml.
+- If your portable Komorebi is in an unrelated directory AND is not running,
+  YASB cannot know its location; launch Komorebi first or use manual override.
+
 IMPORTANT CAVEATS:
-- Do not use auto-start, CLI installer update, crash dump registration, or
-  automatic Cloud backup scheduling. These are disabled in portable mode.
+- Built-in auto-start, CLI installer update, crash dump registration, or
+  automatic Cloud backup scheduling are disabled in portable mode. Use the
+  provided optional startup menu instead.
 - Nerd Fonts can be downloaded by the first-run wizard into portable Data,
   but not registered persistently. Other apps won't see them as installed fonts.
 - YASB Cloud uses Windows DPAPI for certain encrypted session data. Such data
@@ -53,6 +66,7 @@ Use SOURCE_INFO.txt and PORTABILITY_AUDIT.txt to identify source revision.
 CMD = '''@echo off
 setlocal
 set "YASB_PORTABLE=1"
+set "YASB_HOST_LOCALAPPDATA=%LOCALAPPDATA%"
 set "YASB_CONFIG_HOME=%~dp0Data\\Config"
 set "YASB_DATA_HOME=%~dp0Data\\YASB"
 set "LOCALAPPDATA=%~dp0Data\\LocalAppData"
@@ -65,6 +79,7 @@ endlocal
 CLI_CMD = '''@echo off
 setlocal
 set "YASB_PORTABLE=1"
+set "YASB_HOST_LOCALAPPDATA=%LOCALAPPDATA%"
 set "YASB_CONFIG_HOME=%~dp0Data\\Config"
 set "YASB_DATA_HOME=%~dp0Data\\YASB"
 set "LOCALAPPDATA=%~dp0Data\\LocalAppData"
@@ -114,6 +129,11 @@ def init_stage(src: Path, dest: Path, args: argparse.Namespace) -> None:
     (dest / 'YASB-Portable.cmd').write_text(CMD, encoding='utf-8', newline='\r\n')
     (dest / 'YASB-CLI.cmd').write_text(CLI_CMD, encoding='utf-8', newline='\r\n')
     (dest / 'README_PORTABLE.txt').write_text(PORTABLE_README, encoding='utf-8')
+    helper_dir = Path(__file__).resolve().parents[1] / 'portable_helpers'
+    for helper in sorted(helper_dir.iterdir()):
+        if helper.is_file():
+            shutil.copy2(helper, dest / helper.name)
+
     shutil.copy2(src / 'LICENSE', dest / 'LICENSE')
     shutil.copy2(args.audit, dest / 'PORTABILITY_AUDIT.txt')
     version = get_version(src)

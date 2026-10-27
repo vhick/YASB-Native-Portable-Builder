@@ -36,6 +36,8 @@ jobs:
         run: |
           python ./tests/test_builder.py
           if ($LASTEXITCODE -ne 0) { throw 'Builder self-tests failed.' }
+          python ./tests/test_komorebi_discovery.py
+          if ($LASTEXITCODE -ne 0) { throw 'Komorebi discovery regression tests failed.' }
 
       - name: Retrieve clean upstream source at build time
         env:
@@ -76,6 +78,16 @@ jobs:
         run: |
           python ./scripts/package_native.py --source "$env:UPSTREAM_DIR" --commit "$env:UPSTREAM_COMMIT" --branch "$env:UPSTREAM_DEFAULT_BRANCH" --requested-ref "$env:UPSTREAM_REQUESTED_REF" --audit "$env:RUNNER_TEMP/portability-audit.txt" --output ./artifacts --stage "$env:RUNNER_TEMP/yasb-portable-stage"
           if ($LASTEXITCODE -ne 0) { throw 'Native packaging failed.' }
+
+      - name: Validate unified management console PowerShell syntax
+        run: |
+          $files = Get-ChildItem ./portable_helpers -Filter *.ps1
+          foreach ($file in $files) {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { throw "PowerShell parse errors in $($file.Name): $errors" }
+          }
+          Write-Host "Parsed $($files.Count) optional PowerShell scripts successfully."
 
       - name: Smoke-test CLI from two moved folders (no GUI launch)
         run: |

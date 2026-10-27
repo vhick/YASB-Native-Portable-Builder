@@ -35,6 +35,7 @@ IS_PORTABLE = IS_FROZEN and os.path.isfile(os.path.join(SCRIPT_PATH, "portable.f
 if IS_PORTABLE:
     _portable_root = os.path.join(SCRIPT_PATH, "Data")
     os.environ["YASB_PORTABLE"] = "1"
+    os.environ.setdefault("YASB_HOST_LOCALAPPDATA", os.environ.get("LOCALAPPDATA", ""))
     os.environ["YASB_CONFIG_HOME"] = os.path.join(_portable_root, "Config")
     os.environ["YASB_DATA_HOME"] = os.path.join(_portable_root, "YASB")
     # Redirect direct %LOCALAPPDATA% readers inside this process as a fallback.
@@ -49,6 +50,197 @@ if IS_PORTABLE:
     new = 'folder = Path(os.environ["YASB_DATA_HOME"]) if os.getenv("YASB_DATA_HOME") else Path(os.environ["LOCALAPPDATA"]) / "YASB"'
     replacement(system, old, new, "central widget cache and OAuth-token folder")
     notes.append("core.utils.system.app_data_path() writes to Data/YASB/ when portable.")
+    # Komorebi uses komorebic.exe plus named-pipe events; neither is bundled in YASB.
+    client = src / 'core/widgets/services/komorebi/client.py'
+    replacement(client, 'import logging\n', 'import logging\nimport os\nimport shutil\nimport sys\nfrom pathlib import Path\n',
+                'Komorebi portable resolver imports')
+    resolver = '''def _running_komorebi_cli() -> str | None:
+    """Locate the CLI belonging to the active Komorebi, including a portable copy.
+
+    Uses read-only Windows process APIs. Does not query the registry or scan disks.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        enum = psapi.EnumProcesses
+        enum.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+        enum.restype = wintypes.BOOL
+        open_process = kernel.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        query_image = kernel.QueryFullProcessImageNameW
+        query_image.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        query_image.restype = wintypes.BOOL
+        close = kernel.CloseHandle
+        close.argtypes = [wintypes.HANDLE]
+        close.restype = wintypes.BOOL
+
+        pids = (wintypes.DWORD * 8192)()
+        count_bytes = wintypes.DWORD()
+        if not enum(pids, ctypes.sizeof(pids), ctypes.byref(count_bytes)):
+            return None
+        for pid in pids[:count_bytes.value // ctypes.sizeof(wintypes.DWORD)]:
+            if not pid:
+                continue
+            handle = open_process(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                continue
+            try:
+                buffer = ctypes.create_unicode_buffer(32768)
+                size = wintypes.DWORD(len(buffer))
+                if query_image(handle, 0, buffer, ctypes.byref(size)):
+                    image = Path(buffer.value)
+                    if image.name.lower() == "komorebi.exe":
+                        cli = image.with_name("komorebic.exe")
+                        if cli.is_file():
+                            return str(cli)
+            finally:
+                close(handle)
+    except (OSError, ValueError, AttributeError) as exc:
+        logging.debug("Could not inspect running Komorebi path: %s", exc)
+    return None
+
+
+def _portable_komorebi_path(default: str) -> str:
+    """Resolve Komorebi without installation or manual path entry when possible.
+
+    The active komorebi.exe takes precedence over PATH, so an installed CLI
+    cannot accidentally override a running portable instance. A manually
+    chosen path remains a last-resort override only.
+    """
+    root = Path(sys.executable).resolve().parent
+
+    def cli_at(value: str | Path) -> str | None:
+        path = Path(os.path.expandvars(str(value))).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        if path.is_dir():
+            path = path / "komorebic.exe"
+        if path.name.lower() != "komorebic.exe":
+            return None
+        return str(path) if path.is_file() else None
+
+    explicit = os.environ.get("YASB_KOMOREBIC_PATH", "").strip().strip('"')
+    saved = root / "Data" / "Komorebi.path"
+    if not explicit and os.environ.get("YASB_PORTABLE") == "1" and saved.is_file():
+        explicit = saved.read_text(encoding="utf-8-sig").strip().strip('"')
+    if explicit:
+        selected = cli_at(explicit)
+        if selected:
+            logging.info("Komorebi CLI: explicit override %s", selected)
+            return selected
+        logging.warning("Komorebi manual CLI selection is missing: %s. Trying automatic discovery.", explicit)
+
+    running = _running_komorebi_cli()
+    if running:
+        logging.info("Komorebi CLI: matched running instance %s", running)
+        return running
+
+    # Fast, bounded checks for nearby portable layouts (no full-drive scan).
+    for base in (root, root.parent, root.parent.parent):
+        for sub in ("komorebi", "Komorebi", "Komorebi-Portable", "Tools/Komorebi",
+                    "Apps/komorebi", "App/Komorebi", "App", ""):
+            found = cli_at(base / sub / "komorebic.exe")
+            if found:
+                logging.info("Komorebi CLI: nearby portable path %s", found)
+                return found
+
+    path_hit = shutil.which(default)
+    if path_hit and Path(path_hit).is_file():
+        logging.info("Komorebi CLI: Windows PATH %s", path_hit)
+        return path_hit
+
+    home = Path.home()
+    host_local = os.environ.get("YASB_HOST_LOCALAPPDATA") or os.environ.get("LOCALAPPDATA", "")
+    candidates = [home / "scoop/shims/komorebic.exe", home / "scoop/apps/komorebi/current/komorebic.exe",
+                  home / ".cargo/bin/komorebic.exe"]
+    if host_local:
+        base = Path(host_local)
+        candidates.append(base / "Microsoft/WinGet/Links/komorebic.exe")
+        packages = base / "Microsoft/WinGet/Packages"
+        if packages.is_dir():
+            # WinGet package folder names include changing publisher and version values.
+            for package in packages.glob("*komorebi*"):
+                candidates.append(package / "komorebic.exe")
+                candidates.extend(package.glob("*/komorebic.exe"))
+    scoop = os.environ.get("SCOOP")
+    if scoop:
+        candidates.extend((Path(scoop) / "shims/komorebic.exe",
+                           Path(scoop) / "apps/komorebi/current/komorebic.exe"))
+    programdata = os.environ.get("ProgramData")
+    if programdata:
+        candidates.extend((Path(programdata) / "scoop/shims/komorebic.exe",
+                           Path(programdata) / "scoop/apps/komorebi/current/komorebic.exe"))
+    programfiles = os.environ.get("ProgramFiles")
+    if programfiles:
+        candidates.extend((Path(programfiles) / "komorebi/komorebic.exe",
+                           Path(programfiles) / "LGUG2Z/komorebi/komorebic.exe"))
+    for candidate in candidates:
+        found = cli_at(candidate)
+        if found:
+            logging.info("Komorebi CLI: common installation %s", found)
+            return found
+
+    logging.warning("Komorebi CLI was not found automatically; start Komorebi or use YASB-Manager.cmd manual override.")
+    return default
+
+'''
+    replacement(client, 'type KomorebiNode = dict[str, Any]\n', resolver + 'type KomorebiNode = dict[str, Any]\n',
+                'Komorebi CLI portable path discovery')
+    replacement(client, 'self._komorebic_path = komorebic_path',
+                'self._komorebic_path = _portable_komorebi_path(komorebic_path)',
+                'Komorebi CLI path selection')
+    replacement(client, '        args = [self._komorebic_path, "subscribe", pipe_name]',
+                '        if self._komorebic_path == "komorebic.exe" or (os.path.isabs(self._komorebic_path) and not Path(self._komorebic_path).is_file()):\n'
+                '            self._komorebic_path = _portable_komorebi_path("komorebic.exe")\n'
+                '        args = [self._komorebic_path, "subscribe", pipe_name]',
+                'retry Komorebi discovery on event listener reconnection')
+    shim = '''    def _komorebi_subprocess_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        original = env.get("YASB_HOST_LOCALAPPDATA")
+        if original:
+            env["LOCALAPPDATA"] = original
+        return env
+
+    def _komorebi_check_output(self, *args, **kwargs):
+        kwargs.setdefault("env", self._komorebi_subprocess_env())
+        return subprocess.check_output(*args, **kwargs)
+
+    def _komorebi_run(self, *args, **kwargs):
+        kwargs.setdefault("env", self._komorebi_subprocess_env())
+        return subprocess.run(*args, **kwargs)
+
+    def _komorebi_popen(self, *args, **kwargs):
+        kwargs.setdefault("env", self._komorebi_subprocess_env())
+        return subprocess.Popen(*args, **kwargs)
+
+'''
+    replacement(client, '    @property\n    def komorebic_path(self) -> str:',
+                shim + '    @property\n    def komorebic_path(self) -> str:',
+                'Restore host LOCALAPPDATA only for Komorebi external commands')
+    for api, method in [('check_output', '_komorebi_check_output'), ('run', '_komorebi_run'), ('Popen', '_komorebi_popen')]:
+        source = client.read_text(encoding='utf-8')
+        anchor_call = f'subprocess.{api}('
+        count = source.count(anchor_call)
+        # The one call inside our wrapper must remain an underlying subprocess call.
+        if count < 2:
+            raise RuntimeError(f'Komorebi subprocess.{api} upstream calls changed; expected at least one external call')
+        changed = source.replace(anchor_call, f'self.{method}(')
+        wrapper_start = changed.index(f'    def {method}(')
+        wrapper_end = changed.index('\n    def ', wrapper_start + 8)
+        section = changed[wrapper_start:wrapper_end]
+        if section.count(f'self.{method}(') != 1:
+            raise RuntimeError(f'Komorebi wrapper changed unexpectedly: {api}')
+        changed = changed[:wrapper_start] + section.replace(f'self.{method}(', anchor_call, 1) + changed[wrapper_end:]
+        ast.parse(changed, filename=str(client))
+        client.write_text(changed, encoding='utf-8', newline='\n')
+        print(f'[patched] Komorebi {api} external calls: {count-1}')
+    notes.append('Komorebi auto-discovery: running instance, nearby portable, PATH, Scoop/WinGet/Cargo; manual fallback; reconnect retry and host LOCALAPPDATA preserved.')
 
     win32 = src / 'core/utils/win32/utils.py'
     old = 'def enable_autostart(app_name: str, executable_path: str) -> bool:\n    """Add application to Windows startup."""'
