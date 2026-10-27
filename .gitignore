@@ -1,0 +1,10 @@
+# The builder repo should never contain copies of upstream source or generated apps.
+artifacts/
+upstream/
+dist/
+build/
+*.zip
+__pycache__/
+*.pyc
+.venv/
+.vscode/

@@ -1,0 +1,92 @@
+name: Build YASB Native Portable
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Optional upstream branch, tag or full commit hash (blank = latest default branch)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  native-portable:
+    name: Native Portable (Windows x64)
+    runs-on: windows-2025
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout independent builder repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Windows Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          architecture: x64
+
+      - name: Retrieve clean upstream source at build time
+        env:
+          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+        run: |
+          & ./scripts/fetch-upstream.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'yasb-upstream') -Ref $env:UPSTREAM_REF
+          if ($LASTEXITCODE -ne 0) { throw 'Upstream retrieval failed.' }
+
+      - name: Inspect and apply native portable patches
+        run: |
+          python ./scripts/patch_portable.py --source "$env:UPSTREAM_DIR" --audit "$env:RUNNER_TEMP/portability-audit.txt"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable patch failed. Review upstream changes.' }
+
+      - name: Install upstream build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw 'pip upgrade failed.' }
+          Push-Location $env:UPSTREAM_DIR
+          try {
+            python -m pip install -e '.[packaging]'
+            if ($LASTEXITCODE -ne 0) { throw 'Upstream dependency installation failed.' }
+            # YASB currently imports win32api/win32gui; ensure those modules exist.
+            python -m pip install pywin32
+            if ($LASTEXITCODE -ne 0) { throw 'pywin32 dependency installation failed.' }
+            python -c 'import cx_Freeze, win32api, win32gui, win32com.client; print("Windows build imports OK")'
+            if ($LASTEXITCODE -ne 0) { throw 'Missing Windows native dependencies.' }
+          } finally { Pop-Location }
+
+      - name: Build unpackaged native executables (not MSI)
+        run: |
+          Push-Location (Join-Path $env:UPSTREAM_DIR 'src')
+          try {
+            python build.py build
+            if ($LASTEXITCODE -ne 0) { throw 'Upstream cx_Freeze build failed.' }
+          } finally { Pop-Location }
+
+      - name: Stage Native Portable directory and metadata
+        run: |
+          python ./scripts/package_native.py --source "$env:UPSTREAM_DIR" --commit "$env:UPSTREAM_COMMIT" --branch "$env:UPSTREAM_DEFAULT_BRANCH" --requested-ref "$env:UPSTREAM_REQUESTED_REF" --audit "$env:RUNNER_TEMP/portability-audit.txt" --output ./artifacts --stage "$env:RUNNER_TEMP/yasb-portable-stage"
+          if ($LASTEXITCODE -ne 0) { throw 'Native packaging failed.' }
+
+      - name: Smoke-test CLI from two moved folders (no GUI launch)
+        run: |
+          python ./scripts/smoke_test.py --stage "$env:RUNNER_TEMP/yasb-portable-stage" --report "$env:RUNNER_TEMP/smoke-test.txt"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable CLI relocation check failed.' }
+
+      - name: Add smoke-test report and finalize ZIP
+        run: |
+          python ./scripts/package_native.py --source "$env:UPSTREAM_DIR" --commit "$env:UPSTREAM_COMMIT" --branch "$env:UPSTREAM_DEFAULT_BRANCH" --requested-ref "$env:UPSTREAM_REQUESTED_REF" --audit "$env:RUNNER_TEMP/portability-audit.txt" --smoke "$env:RUNNER_TEMP/smoke-test.txt" --output ./artifacts --stage "$env:RUNNER_TEMP/yasb-portable-stage" --finalize-only
+          if ($LASTEXITCODE -ne 0) { throw 'ZIP finalization failed.' }
+          Get-ChildItem ./artifacts -Filter *.zip | Select-Object Name,Length
+
+      - name: Upload the completed ZIP as a directly downloadable artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/*.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
