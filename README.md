@@ -1,8 +1,10 @@
-# YASB Native Portable — independent no-fork builder
+# YASB Native Portable — independent no-fork builder (v1.1)
 
 **WORKFLOW_MODE: NATIVE** — one workflow, Windows x64. No PortableApps workflow, PAF installer, or upstream fork is included.
 
 This is an **unofficial** builder for upstream [amnweb/yasb](https://github.com/amnweb/yasb). It downloads fresh source from the developer's repository each time the GitHub Action runs, patches **a temporary local clone only**, builds with upstream's `src/build.py build` (cx_Freeze), and uploads a Native Portable ZIP. Your independent builder repository never contains a permanent upstream-source copy.
+
+**Builder v1.1 correction:** Fixes the Stage Native Portable failure seen on 2026-10-27: YASB compiled but the v1.0 packager looked only for `dist/library.zip`. The stage now accepts either `dist/lib/library.zip` (current cx_Freeze layout) or the root archive without moving it, and fails clearly if neither is a valid ZIP. The workflow now executes synthetic packaging regression tests before fetching upstream. You may replace all files in your existing independent builder repo; no fork, repository recreation, or upstream source refresh is required.
 
 **Status:** Builder code, guarded patching, packaging and test scripts are provided. The actual Windows build/portable application **has not been run or verified by the creator of this kit**. GitHub Actions is designed to perform the actual Windows build and report failures. An unsigned build may be blocked by antivirus or SmartScreen; do not turn off protection to run it.
 
@@ -86,7 +88,7 @@ The patcher **fails loudly** if required source code changed and its known ancho
 
 ## 6. Tests and how to read them
 
-The workflow verifies a clean upstream commit SHA and source version, guarded patches (including Python syntax), the four expected frozen executables and `library.zip`, and that the ZIP can be read without CRC errors. It copies the application to two distinct temporary folders with spaces in the path, runs `yasbc.exe --version` and `yasbc.exe --config`, checks that the reported configuration path follows the relocated folder, and compares the known HKCU autostart/font registry values plus YASB's known user profile paths before/after those CLI runs.
+The workflow runs packaging regression tests before the upstream fetch and then verifies a clean upstream commit SHA and source version, guarded patches (including Python syntax), the four expected frozen executables and `library.zip`, and that the ZIP can be read without CRC errors. It copies the application to two distinct temporary folders with spaces in the path, runs `yasbc.exe --version` and `yasbc.exe --config`, checks that the reported configuration path follows the relocated folder, and compares the known HKCU autostart/font registry values plus YASB's known user profile paths before/after those CLI runs.
 
 **It does not** run a real interactive desktop UI in GitHub Actions, test actual removable hardware, detect every possible registry or file write, or test a Windows reinstall. Reports `PORTABILITY_AUDIT.txt` and `SMOKE_TEST.txt` are included in the finished ZIP; a successful smoke test demonstrates a limited subset of portability.
 
@@ -102,6 +104,7 @@ For a stronger local audit, run the app on a clean Windows test account or VM; u
 | `pip install .[packaging]` fails | Read dependency error; upstream's pinned Python packages and `qt-css-engine@dev` branch can change. Verify the supported Python version in the upstream `pyproject.toml`. |
 | `build.py build` fails / DLL missing | Check the `src/build.py` upstream include_files list and whether a binary resource was removed or renamed. Do not invent placeholder DLLs. |
 | Missing executables after build | Upstream may have renamed a frozen entry point. Compare its current `build.py` to `scripts/package_native.py`. |
+| Python archive not found / invalid library.zip | v1.1 checks `dist/lib/library.zip` and `dist/library.zip`; check actual cx_Freeze output if neither exists. |
 | Windows smoke test fails | The CLI may have changed or a frozen module is missing. Look at `yasbc.exe --config` / `--version` in the workflow log. Investigate before trusting the ZIP. |
 | YASB opens with missing icons | Use fonts from the official setup wizard; verify they are available under `Data\LocalAppData\Microsoft\Windows\Fonts`. Windows font API behavior can vary. |
 | Data disappeared after upgrade | Restore your backed-up `Data` folder. Do not delete the folder during updates. |
@@ -131,3 +134,13 @@ YASB original source: https://github.com/amnweb/yasb — **MIT**, copyright the 
 The build uses third-party libraries (including PyQt6/Qt, cx_Freeze, pywin32 and additional upstream requirements). Their redistribution and notice requirements differ. A list of installed Python distributions is recorded as `BUILD_DEPENDENCIES.txt` where available; this file is **not** a replacement for third-party license notices. Review third-party license requirements before publicly redistributing generated application ZIPs, especially Qt/PyQt library licenses. Building for your own use differs from publishing others' binaries.
 
 This builder kit is community work and is not affiliated with or endorsed by the YASB developer.
+
+## v1.0 → v1.1 upgrade with GitHub Desktop
+
+1. In **GitHub Desktop**, open your existing `YASB-Native-Portable-Builder` repository, then **Repository > Show in Explorer**.
+2. Extract the **v1.1 builder kit** and copy its **contents**, including the `.github` directory, directly into the repository folder. Select **Replace files** when Windows prompts you. Do not replace your repository's `.git` directory (it is not included in this kit).
+3. Return to GitHub Desktop. Enter the summary `Fix cx_Freeze library.zip location (v1.1)`, click **Commit to main**, then **Push origin**.
+4. Go to the repository **Actions** tab, select **Build YASB Native Portable** and click **Run workflow**. Keep `upstream_ref` blank for the latest upstream code.
+5. If the Action succeeds, download the resulting native portable ZIP. If another step fails, save **Download logs** from the workflow and inspect the exact new failure.
+
+**Evidence and limits:** The October 27 workflow logs showed a successful Python build but failed before staging because `dist/library.zip` was missing. There is no directory listing from that Windows runner in the supplied logs, so the exact location of its generated Python ZIP cannot be confirmed from that run. Current cx_Freeze convention and upstream setup make `dist/lib/library.zip` likely; the corrected code detects either location and reports the directory contents on failure. Local tests cover synthetic output only, not a full Windows GUI execution.

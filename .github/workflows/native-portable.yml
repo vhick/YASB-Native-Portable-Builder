@@ -32,6 +32,11 @@ jobs:
           python-version: '3.14'
           architecture: x64
 
+      - name: Verify builder packaging regressions (offline)
+        run: |
+          python ./tests/test_builder.py
+          if ($LASTEXITCODE -ne 0) { throw 'Builder self-tests failed.' }
+
       - name: Retrieve clean upstream source at build time
         env:
           UPSTREAM_REF: ${{ inputs.upstream_ref }}

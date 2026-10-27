@@ -88,8 +88,21 @@ def init_stage(src: Path, dest: Path, args: argparse.Namespace) -> None:
     for filename in BINARY_NAMES:
         if not (dist / filename).is_file():
             raise RuntimeError(f'cx_Freeze output is missing {filename} in {dist}; build may be incomplete')
-    if not (dist / 'library.zip').is_file():
-        raise RuntimeError(f'cx_Freeze output missing library.zip in {dist}')
+    # cx_Freeze versions/layouts may place the Python archive under lib/.
+    # Preserve that layout exactly: the frozen executables expect relative paths.
+    library_candidates = (dist / 'lib' / 'library.zip', dist / 'library.zip')
+    library = next((file for file in library_candidates if file.is_file()), None)
+    if library is None:
+        observed = sorted(p.name for p in dist.iterdir()) if dist.is_dir() else []
+        lib_observed = sorted(p.name for p in (dist / 'lib').iterdir()) if (dist / 'lib').is_dir() else []
+        raise RuntimeError(
+            f'cx_Freeze Python archive not found at lib/library.zip or library.zip in {dist}. '
+            f'dist entries: {observed[:30]}; lib entries: {lib_observed[:30]}. '
+            'Inspect the current upstream cx_Freeze output before updating the builder.'
+        )
+    if not zipfile.is_zipfile(library):
+        raise RuntimeError(f'cx_Freeze archive exists but is not a valid ZIP: {library}')
+    print('Verified cx_Freeze Python library archive:', library.relative_to(dist))
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(dist, dest)
