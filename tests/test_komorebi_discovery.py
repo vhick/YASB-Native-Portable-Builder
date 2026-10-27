@@ -1,4 +1,4 @@
-"""v1.5 auto-discovery tests using the exact Python source injected into upstream.
+"""v1.5.1 auto-discovery tests using the exact Python source injected into upstream.
 
 Works offline on Linux and Windows. The actual running-process Win32 API remains
 an integration check requiring a Windows machine with Komorebi running.
@@ -98,7 +98,17 @@ class KomorebiClient:
             saved.unlink()
             assert fn('komorebic.exe') == str(running_cli), 'Running portable Komorebi should override installed PATH'
             scope['_running_komorebi_cli'] = lambda: None
-            assert fn('komorebic.exe') == str(nearby_cli), 'Detect nearby portable folder even if stopped'
+            # Windows hosted runners can provide a DOS 8.3 alias (RUNNER~1)
+            # for the same directory that Path.resolve() reports by its long name.
+            # Compare actual file identity rather than textual path spelling.
+            detected_nearby = fn('komorebic.exe')
+            assert detected_nearby != 'komorebic.exe', 'Nearby Komorebi CLI must be discovered'
+            assert Path(detected_nearby).is_file(), f'Detected CLI does not exist: {detected_nearby}'
+            assert os.path.samefile(detected_nearby, nearby_cli), (
+                f'Nearby CLI must be the correct file, found {detected_nearby!r}; expected {str(nearby_cli)!r}'
+            )
+            if os.path.normcase(os.path.normpath(detected_nearby)) != os.path.normcase(os.path.normpath(str(nearby_cli))):
+                print('PASS: nearby Komorebi discovery handles distinct Windows short/long aliases of the same executable')
             nearby_cli.unlink()
             assert fn('komorebic.exe') == 'komorebic.exe', 'Unlocated app should not invent a binary'
             explicit = t / 'Special Folder' / 'komorebic.exe'
@@ -106,7 +116,7 @@ class KomorebiClient:
             explicit.touch()
             with patch.dict(os.environ, {'YASB_KOMOREBIC_PATH': str(explicit)}):
                 assert fn('komorebic.exe') == str(explicit)
-    print('PASS: v1.5 auto-discovery source parses; manual, running portable, nearby portable, missing and env override decisions')
+    print('PASS: v1.5.1 auto-discovery source parses; manual, running portable, nearby portable, missing and env override decisions')
     print('NOT TESTED: real Windows process enumeration, PowerShell execution, named-pipe events or GUI startup')
 
 

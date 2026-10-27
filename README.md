@@ -1,6 +1,8 @@
-# YASB Native Portable — independent no-fork builder (v1.5)
+# YASB Native Portable — independent no-fork builder (v1.5.1)
 
 **WORKFLOW_MODE: NATIVE** — one workflow, Windows x64. No PortableApps workflow, PAF installer, or upstream fork is included.
+
+**Builder v1.5.1 — Windows path-alias test fix:** Fixes GitHub Actions Step 4 (`AssertionError: Detect nearby portable folder even if stopped`) by verifying that auto-discovery selects the *same executable file*, rather than comparing short (`RUNNER~1`) and long Windows path spellings as text. This is a regression-test correction only: all v1.5 native portability patches, automatic Komorebi detection, and the unified console are unchanged. Your failed run stopped **before retrieving/building upstream YASB**. Local self-tests pass; a fresh Windows Actions run is required to verify this fix on the runner.
 
 **Builder v1.5 — automatic installed/portable Komorebi discovery:** When the YASB Komorebi client initializes, it first checks a manual override if one exists, then inspects the **running komorebi.exe process** to locate its sibling `komorebic.exe` (especially valuable with portable builds). If no running copy can be located, it checks nearby application/portable folders, Windows PATH, common Scoop/WinGet/Cargo paths, and the usual installer directories. The existing Windows named-pipe workspace updates are preserved; this only improves how YASB locates the command line executable. It retries discovery when reconnecting if the command was previously missing. The console now labels manual configuration as a fallback, and option 4 restores full automatic discovery. This does **not** automatically start Komorebi. A portable copy in an unrelated folder cannot be identified while stopped unless on PATH or manually selected.
 
@@ -255,3 +257,16 @@ Menu entries:
 **Autostart is unchanged** and remains opt-in. It starts YASB only; if Komorebi starts later, YASB's reconnecting event listener retries discovery. If Komorebi is neither running nor discoverable, YASB cannot display live workspace state.
 
 **Validation boundary:** Synthetic unit tests exercise discovery order and portability packaging; Windows PowerShell syntax is checked by the workflow. Windows process-path discovery, actual running Komorebi, named-pipe interaction, and GUI behavior must still be tested on Windows.
+
+
+## Updating v1.5 to v1.5.1 — Windows Komorebi test fix
+
+1. Open the existing independent YASB builder repository in GitHub Desktop and choose **Repository → Show in Explorer**.
+2. Extract the **v1.5.1 builder kit ZIP**. Copy everything (including `.github`) into that repository, replacing the corresponding files. Do not remove `.git` and do not copy an extra parent folder.
+3. Commit as `Fix Windows short-path Komorebi regression test v1.5.1` and select **Push origin**.
+4. On GitHub open **Actions → Build YASB Native Portable → Run workflow**. Leave `upstream_ref` blank for the latest developer source.
+5. When the workflow succeeds, download the generated application ZIP. Retain the existing `Data` folder when updating any previous portable application.
+
+### Diagnosis (GitHub Actions 2026-10-27, run 109817804538)
+
+The first test suite passed, but `tests/test_komorebi_discovery.py` failed at its assertion that returned path text equals the nearby fixture's path text. The GitHub-hosted runner used a short `RUNNER~1` name in its temporary directory, which can be expanded by `Path.resolve()` to a long username. That causes a false text mismatch even though both paths identify the same executable. v1.5.1 uses `os.path.samefile()` to check file identity. The Windows-specific cause is supported by earlier GitHub runner path-alias failures; the current log alone does not reveal the actual returned path. The new assertion also checks that the found executable exists. Full Windows integration remains untested until GitHub Actions completes.
