@@ -1,0 +1,144 @@
+name: Build YASB Native Portable (source built)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_version:
+        description: 'Published stable version (latest or v2.0.7)'
+        required: true
+        type: string
+        default: 'latest'
+      css_engine_sha:
+        description: 'Verified 40-char CSS dependency commit, or auto (records resolved SHA)'
+        required: true
+        type: string
+        default: 'auto'
+      package_revision:
+        description: 'Increment to r2, r3, etc. when builder source or package policy changes'
+        required: true
+        type: string
+        default: 'r1'
+      publish_release:
+        description: 'Publish only validated ZIP to this repository Releases'
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: write # strictly required by pinned release publisher; no PAT required
+
+concurrency:
+  group: yasb-native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build verified Windows x64 source ZIP
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout builder repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14 x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          architecture: 'x64'
+
+      - name: Validate builder unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Resolve official stable source + CSS git commits
+        id: source
+        env:
+          VERSION: ${{ inputs.upstream_version }}
+          CSS_SHA: ${{ inputs.css_engine_sha }}
+          REVISION: ${{ inputs.package_revision }}
+        run: |
+          python scripts/resolve_source.py --version $env:VERSION --css-sha $env:CSS_SHA --revision $env:REVISION --out build/identity.json
+          if ($LASTEXITCODE -ne 0) { throw 'Stable source resolution failed' }
+
+      - name: Verify checkout against actual release tag commit
+        run: |
+          python scripts/checkout_source.py --identity build/identity.json --out build/upstream
+          if ($LASTEXITCODE -ne 0) { throw 'Source verification failed' }
+
+      - name: Apply intrinsic native portability and Komorebi SOCK patches
+        env:
+          CSS_SHA: ${{ steps.source.outputs.css_engine_commit }}
+        run: |
+          python scripts/patch_upstream.py --upstream build/upstream --css-sha $env:CSS_SHA --out build/patches.json
+          if ($LASTEXITCODE -ne 0) { throw 'Portable source adaptation failed; upstream changed' }
+          python -m compileall -q build/upstream/src/settings.py build/upstream/src/main.py build/upstream/src/cli.py build/upstream/src/core/utils/cli_server.py build/upstream/src/core/utils/system.py build/upstream/src/core/utils/update_service.py build/upstream/src/core/cloud build/upstream/src/core/widgets/services/komorebi/client.py build/upstream/src/native_portable
+          if ($LASTEXITCODE -ne 0) { throw 'Patched source syntax failed' }
+
+      - name: Produce source-wide persistent-path / shell risk index
+        run: |
+          python scripts/audit_source.py --source build/upstream --out build/source-audit.json
+          if ($LASTEXITCODE -ne 0) { throw 'Source audit scan failed' }
+
+      - name: Install release source dependencies and cx_Freeze
+        working-directory: build/upstream
+        run: |
+          python -m pip install -e ".[packaging]"
+          if ($LASTEXITCODE -ne 0) { throw 'Upstream source dependency install failed' }
+          python -m pip freeze --all > ../pip-freeze.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency snapshot failed' }
+
+      - name: Capture third-party licenses / attribution
+        run: |
+          python scripts/collect_licenses.py --out build/third-party-licenses
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency license inventory failed' }
+
+      - name: Compile actual upstream YASB EXEs (no MSI installer)
+        working-directory: build/upstream/src
+        run: |
+          python build.py build
+          if ($LASTEXITCODE -ne 0) { throw 'cx_Freeze Windows application compilation failed' }
+          if (-not (Test-Path -LiteralPath 'dist/yasb.exe')) { throw 'Source-built yasb.exe absent' }
+
+      - name: Stage and independently validate native ZIP
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          UP_SHA: ${{ steps.source.outputs.upstream_commit }}
+          CSS_SHA: ${{ steps.source.outputs.css_engine_commit }}
+          REVISION: ${{ inputs.package_revision }}
+        run: |
+          $filename = "YASB-NativePortable-v$env:VERSION-x64-$env:REVISION-$($env:UP_SHA.Substring(0,10))-css$($env:CSS_SHA.Substring(0,10))-b$($env:GITHUB_SHA.Substring(0,10)).zip"
+          python scripts/package_native.py --upstream build/upstream --identity build/identity.json --patch-manifest build/patches.json --audit build/source-audit.json --pip-freeze build/pip-freeze.txt --licenses build/third-party-licenses --stage build/staging/YASB-NativePortable --output "releases/$filename"
+          if ($LASTEXITCODE -ne 0) { throw 'Native ZIP validation failed; never publish' }
+          Get-FileHash -Algorithm SHA256 -LiteralPath "releases/$filename" | Format-List
+
+      - name: Publisher independent validation (dry-run first)
+        uses: vhick/portable-release-publisher@v1.1.1
+        with:
+          files: releases/*.zip
+          tag: ${{ steps.source.outputs.release_tag }}
+          release-title: YASB Native Portable v${{ steps.source.outputs.version }} (${{ inputs.package_revision }})
+          tag-prefix: portable-yasb-native-
+          keep-releases: '3'
+          prune: 'false'
+          dry-run: 'true'
+
+      - name: Publish validated native ZIP using shared publisher
+        if: ${{ inputs.publish_release }}
+        uses: vhick/portable-release-publisher@v1.1.1
+        with:
+          files: releases/*.zip
+          tag: ${{ steps.source.outputs.release_tag }}
+          release-title: YASB Native Portable v${{ steps.source.outputs.version }} (${{ inputs.package_revision }})
+          tag-prefix: portable-yasb-native-
+          keep-releases: '3'
+          prune: 'false'
+          dry-run: 'false'

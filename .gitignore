@@ -1,0 +1,7 @@
+# Build outputs generated only in GitHub Actions, not committed
+/build/
+/releases/
+/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
