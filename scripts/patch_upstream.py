@@ -5,6 +5,7 @@ Do not substitute a launcher or manipulate a real user profile.
 """
 from __future__ import annotations
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -16,6 +17,58 @@ def replace_one(data: str, old: str, new: str, label: str) -> str:
     if count != 1:
         raise RuntimeError(f"{label}: expected one exact upstream anchor, found {count}; audit new release")
     return data.replace(old, new, 1)
+
+
+
+def suppress_komorebi_console_windows(source: str) -> str:
+    """Windowless Komorebi child commands; fail closed if upstream shape changes.
+
+    The YASB GUI executable has no console, so spawning a console-mode
+    komorebic.exe (or cmd.exe for the two chained toggle calls) can flash a
+    terminal even when the child immediately exits. We don't suppress command
+    errors, change the retry cadence, or alter portable/installed app state.
+    """
+    method_names = {"Popen", "run", "check_output"}
+
+    def relevant_calls(code: str):
+        tree = ast.parse(code)
+        return [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "subprocess"
+            and node.func.attr in method_names
+        ]
+
+    calls = relevant_calls(source)
+    # Audit all calls, not only query_state or subscribe. Reject unexpected
+    # source shapes rather than silently creating console windows.
+    if len(calls) < 4:
+        raise RuntimeError("Komorebi subprocess audit: unexpectedly few calls; inspect upstream")
+    for call in calls:
+        names = [kw.arg for kw in call.keywords]
+        if "shell" not in names or "creationflags" in names:
+            raise RuntimeError("Komorebi subprocess audit: unsupported call signature")
+
+    # Only the audited Komorebi client is modified, not generic subprocesses
+    # elsewhere in YASB (some are intended to open user-visible applications).
+    pattern = r"\bshell=(?:True|False)\b"
+    matches = list(re.finditer(pattern, source))
+    if len(matches) != len(calls):
+        raise RuntimeError("Komorebi subprocess audit: shell keyword count mismatch")
+    patched = re.sub(
+        pattern,
+        lambda match: match.group(0) + ", creationflags=subprocess.CREATE_NO_WINDOW",
+        source,
+    )
+    final_calls = relevant_calls(patched)
+    if len(final_calls) != len(calls) or any(
+        sum(kw.arg == "creationflags" for kw in call.keywords) != 1
+        for call in final_calls
+    ):
+        raise RuntimeError("Komorebi windowless subprocess verification failed")
+    return patched
 
 
 def patch_files(root: Path) -> list[dict]:
@@ -163,7 +216,9 @@ else:
             'subprocess.Popen(command, shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)',
             'subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)',
             'Komorebi intentional chained command subprocess.Popen')
-        return text
+        # r2: keep r1's proven direct invocation and subscription semantics,
+        # but prevent all Komorebi console processes from flashing on Windows.
+        return suppress_komorebi_console_windows(text)
     update('core/widgets/services/komorebi/client.py', client)
 
     nd = src / 'native_portable'

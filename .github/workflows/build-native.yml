@@ -1,4 +1,4 @@
-name: Build YASB Native Portable (source built)
+name: Build YASB Native Portable (source built, no-flash r2)
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
         description: 'Increment to r2, r3, etc. when builder source or package policy changes'
         required: true
         type: string
-        default: 'r1'
+        default: 'r2'
       publish_release:
         description: 'Publish only validated ZIP to this repository Releases'
         type: boolean
@@ -74,7 +74,7 @@ jobs:
           python scripts/checkout_source.py --identity build/identity.json --out build/upstream
           if ($LASTEXITCODE -ne 0) { throw 'Source verification failed' }
 
-      - name: Apply intrinsic native portability and Komorebi SOCK patches
+      - name: Apply intrinsic portability, Komorebi SOCK and windowless subprocess patches
         env:
           CSS_SHA: ${{ steps.source.outputs.css_engine_commit }}
         run: |

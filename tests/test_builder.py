@@ -1,5 +1,6 @@
 """Offline self-tests (non-GUI); genuine Windows runtime tests are manual."""
 import importlib.util
+import ast
 import json
 from pathlib import Path
 import struct
@@ -80,11 +81,36 @@ AUTOSTART_FILE = EXE_PATH if os.path.exists(EXE_PATH) else None
             client=(root/'src/core/widgets/services/komorebi/client.py').read_text()
             self.assertIn('socket_is_online()',client)
             self.assertIn('shell=False',client)
+            self.assertIn('creationflags=subprocess.CREATE_NO_WINDOW',client)
             self.assertIn('yasb_native_portable_pipe_cli',(root/'src/cli.py').read_text())
             self.assertIn('native_instance_running()', (root/'src/core/cloud/restore.py').read_text())
             self.assertEqual(len(list((root/'src/native_portable').glob('*.py'))),3)
             with self.assertRaises(RuntimeError):
                 patch.patch_files(root)  # fail closed, not double-patch
+
+    def test_every_komorebi_subprocess_is_windowless(self):
+        with tempfile.TemporaryDirectory() as directory:
+            upstream = Path(directory)
+            self.setup_fixture(upstream)
+            patch.patch_files(upstream)
+            client_text = (upstream/'src/core/widgets/services/komorebi/client.py').read_text(encoding='utf8')
+            tree = ast.parse(client_text)
+            calls = [node for node in ast.walk(tree)
+                     if isinstance(node, ast.Call)
+                     and isinstance(node.func, ast.Attribute)
+                     and isinstance(node.func.value, ast.Name)
+                     and node.func.value.id == 'subprocess'
+                     and node.func.attr in {'Popen', 'run', 'check_output'}]
+            self.assertEqual(len(calls), 4)
+            for node in calls:
+                flags = [kw for kw in node.keywords if kw.arg == 'creationflags']
+                self.assertEqual(len(flags), 1)
+                self.assertIsInstance(flags[0].value, ast.Attribute)
+                self.assertEqual(flags[0].value.attr, 'CREATE_NO_WINDOW')
+
+    def test_unexpected_komorebi_subprocess_fails_closed(self):
+        with self.assertRaises(RuntimeError):
+            patch.suppress_komorebi_console_windows('import subprocess\nsubprocess.Popen(["x"])\n')
 
     def test_patch_mismatch_fails_closed(self):
         with self.assertRaises(RuntimeError):

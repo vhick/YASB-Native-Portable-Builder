@@ -1,4 +1,4 @@
-# YASB Native Portable — source-builder kit r1
+# YASB Native Portable — source-builder kit r2 (Komorebi console flash fix)
 
 **Mode: NATIVE ONLY.** This repository is an **independent builder**, not an upstream fork and not the compiled YASB app itself. Its workflow downloads a published stable YASB source release, verifies the exact Git SHA, patches source-level storage and local Komorebi discovery, compiles the actual Python/PyQt6 application into Windows PE EXEs with cx_Freeze, checks its native ZIP, then invokes the pinned Universal Release Publisher. No PortableApps launcher or installer is used.
 
@@ -11,7 +11,7 @@
 3. In GitHub Desktop, choose **File > Clone repository** and clone the empty repository. An empty remote repository can be cloned; if Desktop offers **Create a repository** instead, follow its instructions to create the matching local directory and publish it to the new remote.
 4. Extract **the contents** of this builder-kit ZIP **directly into the cloned repository folder**, not into an extra nested folder. Ensure `.github/workflows/build-native.yml` is copied. In File Explorer, enable **View > Show > Hidden items** if necessary.
 5. In GitHub Desktop, select **Commit to main**, then **Push origin**. There is no manual Git initialization, developer fork, Python installation, PowerShell policy change, or local compiler required.
-6. On GitHub, open the repository's **Actions** tab. If prompted, enable workflows. Select **Build YASB Native Portable (source built)**, click **Run workflow**, leave `upstream_version=latest`, `css_engine_sha=auto`, `package_revision=r1`, and `publish_release=true`.
+6. On GitHub, open the repository's **Actions** tab. If prompted, enable workflows. Select **Build YASB Native Portable (source built, no-flash r2)**, click **Run workflow**, leave `upstream_version=latest`, `css_engine_sha=auto`, `package_revision=r2`, and `publish_release=true`.
 7. Read the logs. A red step means build validation or publishing failed. A green workflow means headless CI steps passed, **not** that the Windows desktop behaved correctly.
 8. Under **Releases**, download the `YASB-NativePortable-v...-x64-r...zip` plus the publisher-generated `SHA256SUMS.txt`. Compare SHA-256 checksums with `Get-FileHash` or Windows `certutil`.
 9. Extract the application ZIP to a writeable directory such as `D:\Portable\YASB-NativePortable`. Double-click **`yasb.exe` directly**. Keep `lib`, `assets`, `Data` and all adjacent runtime files together. On first run, YASB's setup wizard may initialize config.
@@ -44,6 +44,8 @@ YASB-NativePortable/
 ## 3. Komorebi SOCK integration
 
 The native YASB build performs a **read-only probe** of `%LOCALAPPDATA%\komorebi\komorebi.sock` (or `YASB_KOMOREBI_SOCK_PATH`). On Windows it finds a running `komorebi.exe` by inspecting Windows process metadata and uses a sibling `komorebic.exe` in the **same running Komorebi folder**. This supports an independently portable Komorebi binary that is not registered on `PATH`. Its fallback is a valid explicitly configured CLI path, then normal `PATH`.
+
+**r2 console-flash fix:** The native source patch adds Windows `subprocess.CREATE_NO_WINDOW` to every audited Komorebi `Popen`, `run`, and `check_output` call in `src/core/widgets/services/komorebi/client.py`. This includes the offline state polls, the subscription retry, workspace controls and two existing shell-chained toggle commands. It does not disable retry/reconnection, change subprocess errors, set Windows-wide policies or hide unrelated user-invoked programs. Unlike r1, short-lived `komorebic.exe` / `cmd.exe` processes should not display console windows. This is a source fix, not a required launcher. See `docs/R2-CONSOLE-FLASH.md` for tests and scope.
 
 YASB continues to use **its actual upstream named-pipe listener** for `komorebic subscribe`. SOCK discovery is **not** a replacement for subscription and is **not proof** that workspaces or appbar offsets render correctly. No Komorebi setting is automatically edited.
 

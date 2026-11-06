@@ -47,3 +47,16 @@ The shared `Portable-Package-Builder@v1.0.0` was examined but intentionally NOT 
 ## Remaining runtime risks
 
 Qt's internal caches, Windows notifications, optional wallpaper, audio, themes URI protocol, clipboard, taskbar hooks, Cloud third-party modules and other user-selected widgets have not received attributable process tracing. No promise of zero Windows-managed traces or full physical-drive portability is possible from static inspection. A failure in the live Windows acceptance checklist must be addressed at source; do not add a host-scavenging wrapper to fix it.
+
+## r2 source audit addendum: console flashing when Komorebi is offline
+
+- **SOURCE-INSPECTED:** `src/core/widgets/services/komorebi/client.py` at upstream v2.0.7 launches `komorebic.exe` with `subprocess` for `state`, workspace control, and `subscribe` and uses `shell=True` for two chained commands. The r1 patch changed most `shell=True` calls to `shell=False`, but supplied no Windows `creationflags`.
+- **SOURCE-INSPECTED:** `src/core/widgets/services/komorebi/event_listener.py` retries failed `subscribe` operations while Komorebi is offline; its listener does not directly spawn consoles.
+- **NATIVE REMEDY:** `scripts/patch_upstream.py` injects `creationflags=subprocess.CREATE_NO_WINDOW` only into the audited Komorebi client subprocess calls. The function AST-validates that every subprocess call is handled before allowing the source build. This flag is documented in Python's Windows subprocess reference.
+- **NOT YET VERIFIED:** Whether every visible flash was caused by these commands. Other enabled widgets or user configuration can spawn separate consoles; test with Process Monitor if flashing persists. Headless CI cannot assert GUI window visibility.
+- **DATA SAFETY:** No portable profile logic, existing data, host registry state, or Komorebi settings are changed by r2.
+
+Source references:
+- https://raw.githubusercontent.com/amnweb/yasb/v2.0.7/src/core/widgets/services/komorebi/client.py
+- https://raw.githubusercontent.com/amnweb/yasb/v2.0.7/src/core/widgets/services/komorebi/event_listener.py
+- https://docs.python.org/3/library/subprocess.html#subprocess.CREATE_NO_WINDOW
