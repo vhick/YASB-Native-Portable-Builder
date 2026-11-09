@@ -4,7 +4,7 @@
 
 | Test/evidence | Status at kit creation | Evidence and next action |
 |---|---|---|
-| Published v2.0.7 release / source paths | SOURCE-INSPECTED | GitHub source tag and Python modules inspected; actual commit SHA resolved only at CI runtime |
+| Published v2.0.7 release / historical source paths | SOURCE-INSPECTED | GitHub source tag and Python modules inspected; actual commit SHA resolved only at CI runtime |
 | Python syntax / fixture patch / release resolver / ZIP parser | STATIC-VALIDATED | Offline tests run in development; fixtures are synthetic, not actual Windows runtime |
 | Latest stable version auto-resolve | NOT YET VERIFIED | Code and numeric-version fixture checked; GitHub Actions must execute API resolution |
 | Actual `cx_Freeze` Windows compile | NOT YET VERIFIED | Run hosted Windows Actions |
@@ -56,3 +56,8 @@ Use a **non-critical Windows test profile or Windows Sandbox** first, with a rol
 **Failed publisher:** verify permissions, repository Actions/GITHUB_TOKEN policy and `dry-run` output. The verified ZIP remains a CI-run workspace output but will not automatically appear in Releases if publisher fails. Re-run once errors are corrected; workflow does not pretend the release is published.
 
 **Installer requested:** there is deliberately none; requesting a PortableApps installer changes the product architecture and needs its own verified builder.
+
+
+## r3 / YASB 2.0.8 test scope
+
+The r3 adapter adds a source-derived fixture suite for the relocated 2.0.8 mutex and CLI pipes, and for the modern Komorebi subprocess shapes. A passing fixture test is **NOT** proof of compilation against an entire real upstream 2.0.8 checkout. Run the hosted Windows workflow, then manually test direct YASB startup, no console flashes while Komorebi is offline, workspace reconnect, portable data files, native CLI start/stop, and installed-YASB coexistence. Preserve r2 binaries and Data backup as rollback.

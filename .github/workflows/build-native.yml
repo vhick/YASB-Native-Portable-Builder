@@ -1,10 +1,10 @@
-name: Build YASB Native Portable (source built, no-flash r2)
+name: Build YASB Native Portable (source built, r3 compatible)
 
 on:
   workflow_dispatch:
     inputs:
       upstream_version:
-        description: 'Published stable version (latest or v2.0.7)'
+        description: 'Published stable version (latest, v2.0.8, or v2.0.7)'
         required: true
         type: string
         default: 'latest'
@@ -14,10 +14,10 @@ on:
         type: string
         default: 'auto'
       package_revision:
-        description: 'Increment to r2, r3, etc. when builder source or package policy changes'
+        description: 'Increment when builder source or package policy changes'
         required: true
         type: string
-        default: 'r2'
+        default: 'r3'
       publish_release:
         description: 'Publish only validated ZIP to this repository Releases'
         type: boolean
@@ -80,7 +80,7 @@ jobs:
         run: |
           python scripts/patch_upstream.py --upstream build/upstream --css-sha $env:CSS_SHA --out build/patches.json
           if ($LASTEXITCODE -ne 0) { throw 'Portable source adaptation failed; upstream changed' }
-          python -m compileall -q build/upstream/src/settings.py build/upstream/src/main.py build/upstream/src/cli.py build/upstream/src/core/utils/cli_server.py build/upstream/src/core/utils/system.py build/upstream/src/core/utils/update_service.py build/upstream/src/core/cloud build/upstream/src/core/widgets/services/komorebi/client.py build/upstream/src/native_portable
+          python -m compileall -q build/upstream/src
           if ($LASTEXITCODE -ne 0) { throw 'Patched source syntax failed' }
 
       - name: Produce source-wide persistent-path / shell risk index

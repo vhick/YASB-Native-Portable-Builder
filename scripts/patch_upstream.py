@@ -71,6 +71,24 @@ def suppress_komorebi_console_windows(source: str) -> str:
     return patched
 
 
+def verify_komorebi_no_windows(source: str, min_calls: int) -> None:
+    # Fail closed if the modern client contains any unguarded child command.
+    tree = ast.parse(source)
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and isinstance(node.func.value, ast.Name)
+             and node.func.value.id == 'subprocess'
+             and node.func.attr in {'Popen', 'run', 'check_output'}]
+    if len(calls) < min_calls:
+        raise RuntimeError(f'Komorebi subprocess audit: expected >= {min_calls}, found {len(calls)}')
+    for call in calls:
+        flags = [kw.value for kw in call.keywords if kw.arg == 'creationflags']
+        if (len(flags) != 1 or not isinstance(flags[0], ast.Attribute)
+            or not isinstance(flags[0].value, ast.Name)
+            or flags[0].value.id != 'subprocess' or flags[0].attr != 'CREATE_NO_WINDOW'):
+            raise RuntimeError(f'Komorebi subprocess without CREATE_NO_WINDOW at line {call.lineno}')
+
+
 def patch_files(root: Path) -> list[dict]:
     src = root / 'src'
     changes = []
@@ -109,29 +127,41 @@ else:
         return replace_one(text, old, new, 'local application data')
     update('core/utils/system.py', system)
 
-    # Distinct native instance/pipe identities prevent stop/reload/log commands
-    # from reaching an installed copy of YASB.
-    def main_file(text):
-        return replace_one(text, 'def single_instance_lock(name: str = "yasb_reborn"):',
+    # 2.0.8 moved mutex and named-pipe definitions into separate modules.
+    # Distinguish the known layouts and fail closed on partial refactors.
+    new_mutex = src / 'core/utils/single_instance.py'
+    old_mutex = 'def single_instance_lock(name: str = "yasb_reborn"):' in (src / 'main.py').read_text(encoding='utf-8')
+    if new_mutex.exists() == old_mutex:
+        raise RuntimeError('Ambiguous YASB single-instance layout; audit upstream source')
+    modern = new_mutex.is_file()
+    if modern:
+        update('core/utils/single_instance.py', lambda text: replace_one(
+            text, 'BAR_MUTEX_NAME = "yasb_reborn"', 'BAR_MUTEX_NAME = "yasb_native_portable"',
+            '2.0.8 portable mutex constant'))
+    else:
+        update('main.py', lambda text: replace_one(
+            text, 'def single_instance_lock(name: str = "yasb_reborn"):',
             'def single_instance_lock(name: str = "yasb_native_portable"):',
-            'unique portable instance mutex')
-    update('main.py', main_file)
+            '2.0.7 portable mutex default'))
 
-    def cli_server(text):
+    def patch_pipes(text, label):
         for suffix in ('cli', 'log'):
             text = replace_one(text,
                 f'\\\\.\\pipe\\yasb_pipe_{suffix}',
                 f'\\\\.\\pipe\\yasb_native_portable_pipe_{suffix}',
-                f'unique portable {suffix} server pipe')
+                f'unique portable {suffix} {label} pipe')
         return text
-    update('core/utils/cli_server.py', cli_server)
+
+    if modern:
+        if (src / 'core/utils/cli_server.py').exists():
+            raise RuntimeError('Ambiguous CLI server layout in modern YASB')
+        update('core/cli/pipe.py', lambda text: patch_pipes(text, 'shared'))
+    else:
+        update('core/utils/cli_server.py', lambda text: patch_pipes(text, 'server'))
 
     def cli(text):
-        for suffix in ('cli', 'log'):
-            text = replace_one(text,
-                f'\\\\.\\pipe\\yasb_pipe_{suffix}',
-                f'\\\\.\\pipe\\yasb_native_portable_pipe_{suffix}',
-                f'unique portable {suffix} client pipe')
+        if not modern:
+            text = patch_pipes(text, 'client')
         text = replace_one(text, 'AUTOSTART_FILE = EXE_PATH if os.path.exists(EXE_PATH) else None',
             'AUTOSTART_FILE = EXE_PATH if os.path.exists(EXE_PATH) else None\n'
             'APP_NAME = "YASB Native Portable"  # never reuse installed YASB startup identity',
@@ -180,11 +210,37 @@ else:
 
     def client(text):
         text = replace_one(text, 'import subprocess\n',
-            'import subprocess\nfrom native_portable.komorebi_socket import discover_komorebic, socket_is_online\n', 'Komorebi module import')
+            'import subprocess\nfrom native_portable.komorebi_socket import discover_komorebic, socket_is_online\n',
+            'Komorebi module import')
         text = replace_one(text, '        self._komorebic_path = komorebic_path',
             '''        self._komorebic_path = discover_komorebic(komorebic_path)
         # Read-only UDS probe: never create/delete Komorebi's socket or config.
         self._komorebi_socket_seen = socket_is_online()''', 'Komorebi client initialization')
+        if modern:
+            # YASB 2.0.8 already adds CREATE_NO_WINDOW to most subprocesses.
+            text = replace_one(text, '    def query_state(self) -> KomorebiNode | None:\n        try:',
+                '''    def query_state(self) -> KomorebiNode | None:
+        self._komorebic_path = discover_komorebic(self._komorebic_path)
+        self._komorebi_socket_seen = socket_is_online()
+        try:''', 'Komorebi state rediscovery v2.0.8')
+            text = replace_one(text,
+                '    def wait_until_subscribed_to_pipe(self, pipe_name: str):\n        args = [self._komorebic_path, "subscribe", pipe_name]',
+                '''    def wait_until_subscribed_to_pipe(self, pipe_name: str):
+        self._komorebic_path = discover_komorebic(self._komorebic_path)
+        self._komorebi_socket_seen = socket_is_online()
+        args = [self._komorebic_path, "subscribe", pipe_name]''',
+                'Komorebi subscription rediscovery v2.0.8')
+            text = replace_one(text,
+                'subprocess.run(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)',
+                'subprocess.run(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, creationflags=subprocess.CREATE_NO_WINDOW)',
+                '2.0.8 toggle run no console')
+            text = replace_one(text,
+                'subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)',
+                'subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)',
+                '2.0.8 toggle Popen no console')
+            verify_komorebi_no_windows(text, min_calls=10)
+            return text
+        # YASB 2.0.7 retains the user-confirmed r2 implementation.
         text = replace_one(text, '    def query_state(self) -> dict | None:\n        try:',
             '''    def query_state(self) -> dict | None:
         # Komorebi may start after YASB. Re-discover a portable sibling executable.
@@ -196,17 +252,12 @@ else:
         self._komorebic_path = discover_komorebic(self._komorebic_path)
         self._komorebi_socket_seen = socket_is_online()
         proc = subprocess.Popen(''', 'Komorebi subscription discovery')
-        # Fix fragile Windows list + shell invocation when executable is in a Unicode/spaced directory.
         text = replace_one(text,
             '[self._komorebic_path, "subscribe", pipe_name], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE',
             '[self._komorebic_path, "subscribe", pipe_name], shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE',
             'Komorebi named pipe subscription')
         text = replace_one(text, '[self._komorebic_path, "state"],\n                timeout=self._timeout_secs,\n                stderr=subprocess.PIPE,\n                shell=True,',
             '[self._komorebic_path, "state"],\n                timeout=self._timeout_secs,\n                stderr=subprocess.PIPE,\n                shell=False,', 'Komorebi state command')
-        # All remaining list-based komorebic calls must execute the sibling
-        # binary directly, not via cmd.exe (breaks portable paths with spaces).
-        # Only the two explicitly composed `command` strings retain a shell,
-        # because they use && to chain two upstream commands.
         text = text.replace('shell=True', 'shell=False')
         text = replace_one(text,
             'subprocess.run(command, shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)',
@@ -216,8 +267,6 @@ else:
             'subprocess.Popen(command, shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)',
             'subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)',
             'Komorebi intentional chained command subprocess.Popen')
-        # r2: keep r1's proven direct invocation and subscription semantics,
-        # but prevent all Komorebi console processes from flashing on Windows.
         return suppress_komorebi_console_windows(text)
     update('core/widgets/services/komorebi/client.py', client)
 

@@ -132,7 +132,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--version', default='latest')
     ap.add_argument('--css-sha', default='auto')
-    ap.add_argument('--revision', default='r2')
+    ap.add_argument('--revision', default='r3')
     ap.add_argument('--out', type=Path, required=True)
     a = ap.parse_args()
     builder = os.environ.get('GITHUB_SHA', 'local-uncommitted')

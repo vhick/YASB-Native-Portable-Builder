@@ -1,5 +1,7 @@
 # YASB v2.0.7 native-source audit — November 6, 2026
 
+**For YASB v2.0.8:** This table describes the historical r2 source layout. See `R3-V208-COMPATIBILITY.md` for the audited November 9, 2026 refactors and r3 source adapters. Do not assume the v2.0.7 file locations still exist in v2.0.8.
+
 ## Evidence basis
 
 GitHub `amnweb/yasb` release v2.0.7, with source inspected at the immutable release tag URL. This is a **source audit**, not Windows ProcMon runtime observation. `latest` in the workflow discovers later published stable releases but will fail closed if the adapters' exact source anchors change. The source is MIT; Python >=3.14; PyQt6 6.10.2; `cx_Freeze==8.6.4`; pyproject defines a dependency on mutable `qt-css-engine@dev` until pinned by this builder. See project README for live links.
